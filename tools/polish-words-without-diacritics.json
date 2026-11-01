@@ -1,0 +1,7 @@
+{
+  "why": "Polish words that are never correct without their diacritics. Shared by apps/web/src/lib/ui-polish-text.test.ts (UI texts must keep their diacritics) and apps/api/test/unit/admin-messages-english.spec.ts (admin messages must be English). Lower case; matched as whole words, case-insensitive.",
+  "words": [
+    "sie", "udalo", "utworzyc", "zaladowac", "usunac", "zapisac", "bledu", "blad", "wiecej", "mozna", "prosze",
+    "wstawil", "zwrocil", "zapotrzebowan", "rekordow"
+  ]
+}

@@ -1,0 +1,12 @@
+-- Dodaje wartosc 'VEHICLE_FUEL_CARD_EXPIRY' do typu NotificationType.
+--
+-- Do tej pory `fuelCardExpiry` dzielilo typ powiadomienia z `insuranceTo`
+-- ('VEHICLE_INSURANCE_EXPIRY'). Deduplikacja w VehiclesService pyta o
+-- (type, message contains plateNumber, createdAt >= since), wiec powiadomienie
+-- o ubezpieczeniu tlumilo to o karcie paliwowej dla tego samego pojazdu —
+-- kolejnosc sprawdzania stawia ubezpieczenie pierwsze, wiec ginela zawsze karta.
+--
+-- ALTER TYPE ... ADD VALUE jest bezpieczne w transakcji na PostgreSQL >= 12,
+-- dopoki nowa wartosc nie jest uzywana w tej samej transakcji. Ta migracja
+-- jej nie uzywa.
+ALTER TYPE "NotificationType" ADD VALUE 'VEHICLE_FUEL_CARD_EXPIRY';

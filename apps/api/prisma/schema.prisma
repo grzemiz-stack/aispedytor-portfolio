@@ -1,0 +1,659 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum SubscriptionPlan {
+  FREE
+  BASIC
+  PRO
+}
+
+enum UserRole {
+  ADMIN
+  DISPATCHER
+}
+
+enum VehicleType {
+  TRUCK
+  VAN
+  MEGA
+  STANDARD
+  REFRIGERATED
+}
+
+enum TrailerType {
+  CURTAIN
+  BOX
+  REEFER
+  FLATBED
+  TANKER
+}
+
+enum VehicleStatus {
+  AVAILABLE
+  IN_TRANSIT
+  LOADING
+  RETURNING
+}
+
+enum OfferSource {
+  TRANS_EU
+  TIMOCOM
+  TELEROUTE
+  EMAIL
+  MANUAL
+  GENERIC
+  API
+}
+
+enum OfferStatus {
+  NEW
+  ASSIGNED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  IN_TRANSIT
+  COMPLETED
+}
+
+enum NotificationType {
+  NEW_OFFER
+  URGENT
+  RELOAD
+  RETURN
+  RISK_ALERT
+  VEHICLE_INSPECTION_EXPIRY
+  VEHICLE_INSURANCE_EXPIRY
+  VEHICLE_TACHOGRAPH_EXPIRY
+  VEHICLE_MAINTENANCE
+  DEMAND_MATCH
+  VEHICLE_FUEL_CARD_EXPIRY
+}
+
+enum EmailCategory {
+  OFFER
+  INQUIRY
+  COMPLAINT
+  INVOICE
+  OTHER
+}
+
+enum EmailPriority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model Company {
+  id               String           @id @default(uuid())
+  name             String
+  taxId            String?          @map("tax_id")
+  regon            String?          @map("regon")
+  street           String?          @map("street")
+  city             String?          @map("city")
+  postalCode       String?          @map("postal_code")
+  country          String?          @default("PL") @map("country")
+  billingEmail     String?          @map("billing_email")
+  phone            String?          @map("phone")
+  website          String?          @map("website")
+  logoBase64       String?          @map("logo_base64")
+  subscriptionPlan SubscriptionPlan @default(FREE) @map("subscription_plan")
+  maxDispatchers   Int              @default(10) @map("max_dispatchers")
+  settings         Json?
+  /// The company's cost per km, in `costCurrency`. `null` = not given —
+  /// the LTL ranking then uses revenue, not profit. Database CHECK: > 0.
+  costPerKm        Decimal?         @map("cost_per_km") @db.Decimal(10, 2)
+  /// The company's currency: of its cost and of the LTL ranking. Database
+  /// CHECK: PLN, EUR, GBP (`COMPANY_CURRENCIES`).
+  costCurrency     String           @default("PLN") @map("cost_currency")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  users         User[]
+  vehicles      Vehicle[]
+  offers        Offer[]
+  contractors   Contractor[]
+  demands       DispatcherDemand[]
+  notifications Notification[]
+  emailMessages EmailMessage[]
+
+  exchangeConnections ExchangeConnection[]
+  publishedOffers     PublishedOffer[]
+  drivers             Driver[]
+
+  @@map("companies")
+}
+
+model User {
+  id                 String    @id @default(uuid())
+  companyId          String    @map("company_id")
+  company            Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  // Stored encrypted (AES-256-GCM) — search via hash
+  emailEncrypted     String    @map("email_encrypted")
+  emailHash          String    @unique @map("email_hash")
+  passwordHash       String    @map("password_hash")
+  firstNameEncrypted String    @map("first_name_encrypted")
+  lastNameEncrypted  String    @map("last_name_encrypted")
+  phoneEncrypted     String?   @map("phone_encrypted")
+  role               UserRole  @default(DISPATCHER)
+  preferences        Json?
+  isActive           Boolean   @default(true) @map("is_active")
+  lastLoginAt        DateTime? @map("last_login_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  vehicles              Vehicle[]
+  assignedOffers        Offer[]
+  demands               DispatcherDemand[]
+  notifications         Notification[]
+  refreshTokens         RefreshToken[]
+  driverStatusesEntered DriverStatus[]
+
+  @@index([companyId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  /// SHA-256 (hex) of the token — only the client knows the token itself.
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  /// Every login starts a family; a refresh keeps it.
+  familyId  String    @map("family_id")
+  /// When the token was rotated. Using it again deletes the whole family.
+  usedAt    DateTime? @map("used_at")
+
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model Vehicle {
+  id                         String        @id @default(uuid())
+  companyId                  String        @map("company_id")
+  company                    Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dispatcherId               String?       @map("dispatcher_id")
+  dispatcher                 User?         @relation(fields: [dispatcherId], references: [id])
+  plateNumber                String        @map("plate_number")
+  licensePlate               String?       @map("license_plate")
+  ocrNumber                  String?       @map("ocr_number")
+  brand                      String?
+  model                      String?
+  vin                        String?
+  year                       Int?
+  vehicleType                VehicleType   @map("vehicle_type")
+  trailerType                TrailerType?  @map("trailer_type")
+  maxWeightKg                Int?          @map("max_weight_kg")
+  // Gross weight of the combination and curb weight — needed for the gross
+  // weight check. Optional in the schema, required by LTL (assertVehicleRecordComplete).
+  grossVehicleWeightKg       Int?          @map("gross_vehicle_weight_kg")
+  curbWeightKg               Int?          @map("curb_weight_kg")
+  maxVolumeM3                Float?        @map("max_volume_m3")
+  lengthM                    Float?        @map("length_m")
+  heightM                    Float?        @map("height_m")
+  widthM                     Float?        @map("width_m")
+  adrClasses                 String[]      @map("adr_classes")
+  currentLat                 Float?        @map("current_lat")
+  currentLng                 Float?        @map("current_lng")
+  currentCity                String?       @map("current_city")
+  currentCountry             String?       @map("current_country")
+  status                     VehicleStatus @default(AVAILABLE)
+  availableFrom              DateTime?     @map("available_from")
+  freeMeters                 Float?        @map("free_meters")
+  freeWeightKg               Int?          @map("free_weight_kg")
+  currentDirection           String?       @map("current_direction")
+  technicalInspectionFrom    DateTime?     @map("technical_inspection_from")
+  technicalInspectionTo      DateTime?     @map("technical_inspection_to")
+  insuranceFrom              DateTime?     @map("insurance_from")
+  insuranceTo                DateTime?     @map("insurance_to")
+  tachographLegalizationFrom DateTime?     @map("tachograph_legalization_from")
+  tachographLegalizationTo   DateTime?     @map("tachograph_legalization_to")
+  plannedMaintenanceDate     DateTime?     @map("planned_maintenance_date")
+  plannedMaintenanceNotes    String?       @map("planned_maintenance_notes")
+  fuelCardType               String?       @map("fuel_card_type")
+  fuelCardLast4              String?       @map("fuel_card_last4")
+  fuelCardExpiry             DateTime?     @map("fuel_card_expiry")
+  // Category & trailer support
+  vehicleCategory            String        @default("TRUCK") @map("vehicle_category")
+  parentVehicleId            String?       @map("parent_vehicle_id")
+  parentVehicle              Vehicle?      @relation("VehicleParent", fields: [parentVehicleId], references: [id])
+  trailers                   Vehicle[]     @relation("VehicleParent")
+  /// Axles of THIS record, not of the whole combination: a tractor usually 2,
+  /// a semi-trailer usually 3. The combination's toll axle class is computed by
+  /// `combinationAxleClass` (common/axle-class.ts) — the sum with attached units.
+  axleCount                  Int?          @map("axle_count")
+  maxLoadingMeters           Float?        @map("max_loading_meters")
+  maxPalletCount             Int?          @map("max_pallet_count")
+  hasAdr                     Boolean       @default(false) @map("has_adr")
+  hasGps                     Boolean       @default(false) @map("has_gps")
+  notes                      String?
+  createdAt                  DateTime      @default(now()) @map("created_at")
+  updatedAt                  DateTime      @updatedAt @map("updated_at")
+
+  driver Driver?
+
+  @@index([companyId, status])
+  @@index([companyId, dispatcherId])
+  @@map("vehicles")
+}
+
+model Offer {
+  id                   String      @id @default(uuid())
+  companyId            String      @map("company_id")
+  company              Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  externalId           String?     @map("external_id")
+  source               OfferSource @default(MANUAL)
+  status               OfferStatus @default(NEW)
+  assignedToId         String?     @map("assigned_to_id")
+  assignedTo           User?       @relation(fields: [assignedToId], references: [id])
+  assignedAt           DateTime?   @map("assigned_at")
+  pickupCity           String      @map("pickup_city")
+  pickupCountry        String      @map("pickup_country")
+  pickupPostal         String?     @map("pickup_postal")
+  pickupLat            Float?      @map("pickup_lat")
+  pickupLng            Float?      @map("pickup_lng")
+  deliveryCity         String      @map("delivery_city")
+  deliveryCountry      String      @map("delivery_country")
+  deliveryPostal       String?     @map("delivery_postal")
+  deliveryLat          Float?      @map("delivery_lat")
+  deliveryLng          Float?      @map("delivery_lng")
+  /// When the geocoding task last tried to fill in the coordinates.
+  /// Without it an offer with an address Nominatim does not know would return
+  /// to the queue on every run and take the place of others.
+  coordsCheckedAt      DateTime?   @map("coords_checked_at")
+  pickupDate           DateTime    @map("pickup_date")
+  deliveryDate         DateTime?   @map("delivery_date")
+  cargoType            String?     @map("cargo_type")
+  weightKg             Float?      @map("weight_kg")
+  volumeM3             Float?      @map("volume_m3")
+  lengthM              Float?      @map("length_m")
+  isAdr                Boolean     @default(false) @map("is_adr")
+  adrClass             String?     @map("adr_class")
+  isFrigo              Boolean     @default(false) @map("is_frigo")
+  temperatureMin       Float?      @map("temperature_min")
+  temperatureMax       Float?      @map("temperature_max")
+  penaltyClauses       String?     @map("penalty_clauses")
+  loadingTimeWindow    Int?        @map("loading_time_window")
+  unloadingTimeWindow  Int?        @map("unloading_time_window")
+  palletExchange       Boolean     @default(false) @map("pallet_exchange")
+  palletExchangeType   String?     @map("pallet_exchange_type")
+  palletCount          Int?        @map("pallet_count")
+  requiredInsuranceMin Float?      @map("required_insurance_min")
+  paymentTermDays      Int?        @map("payment_term_days")
+  specialRequirements  String?     @map("special_requirements")
+  price                Decimal?    @db.Decimal(10, 2)
+  currency             String      @default("EUR")
+  pricePerKm           Decimal?    @map("price_per_km") @db.Decimal(10, 2)
+  distanceKm           Float?      @map("distance_km")
+  fuelCostEstimate     Decimal?    @map("fuel_cost_estimate") @db.Decimal(10, 2)
+  tollCostEstimate     Decimal?    @map("toll_cost_estimate") @db.Decimal(10, 2)
+  totalCostEstimate    Decimal?    @map("total_cost_estimate") @db.Decimal(10, 2)
+  profitEstimate       Decimal?    @map("profit_estimate") @db.Decimal(10, 2)
+  profitMarginPercent  Decimal?    @map("profit_margin_percent") @db.Decimal(5, 2)
+  /// A margin computed without a toll = an upper bound (true); full (false); no margin (null).
+  marginWithoutTolls   Boolean?    @map("margin_without_tolls")
+  notes                String?
+  clientName           String?     @map("client_name")
+  contractorId         String?     @map("contractor_id")
+  contractor           Contractor? @relation(fields: [contractorId], references: [id])
+  contactEmail         String?     @map("contact_email")
+  contactPhone         String?     @map("contact_phone")
+  importedAt           DateTime?   @map("imported_at")
+  expiresAt            DateTime?   @map("expires_at")
+  publishStatus        String      @default("none") @map("publish_status")
+  createdAt            DateTime    @default(now()) @map("created_at")
+  updatedAt            DateTime    @updatedAt @map("updated_at")
+
+  routeCalculations RouteCalculation[]
+
+  @@unique([companyId, source, externalId])
+  @@index([companyId, status, assignedToId])
+  @@index([companyId, pickupCountry, deliveryCountry])
+  @@index([expiresAt])
+  @@map("offers")
+}
+
+/// Result of geocoding an address (Nominatim), shared by all companies —
+/// a city's coordinates are not company data.
+///
+/// `found = false` is the answer "Nominatim does not know this address", kept
+/// for a limited time (7 days, `NOT_FOUND_TTL_DAYS`). A network error is NOT
+/// stored here — otherwise a short outage would mark addresses as unknown for
+/// a week.
+model GeocodeCache {
+  id        String   @id @default(uuid())
+  /// The query after normalization (trimmed, lower case, single spaces).
+  query     String   @unique
+  lat       Float?
+  lng       Float?
+  found     Boolean
+  fetchedAt DateTime @map("fetched_at")
+
+  @@map("geocode_cache")
+}
+
+/// A route calculation saved with an offer (the route planner saves the
+/// recommended route, only with a complete toll from a toll provider).
+///
+/// A separate table, not columns on Offer — toll rates change over time, so
+/// what matters is not only the amount but also WHEN and by which provider it
+/// was computed. History tells "computed yesterday" from "computed six months
+/// ago".
+///
+/// It does NOT replace `Offer.tollCostEstimate`. That field is the
+/// dispatcher's manual correction and takes precedence — the two values are
+/// kept apart on purpose.
+model RouteCalculation {
+  id        String @id @default(uuid())
+  offerId   String @map("offer_id")
+  offer     Offer  @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  companyId String @map("company_id")
+
+  /// Distance of the calculated route, not a straight line.
+  distanceKm Float @map("distance_km")
+
+  tollTotalEur Decimal @map("toll_total_eur") @db.Decimal(10, 2)
+  tollTotalPln Decimal @map("toll_total_pln") @db.Decimal(10, 2)
+
+  /// Breakdown per country: TollBreakdownItem[] from route-planner.service.
+  tollBreakdown Json @map("toll_breakdown")
+
+  /// Countries whose toll could not be resolved, with the reason. A row is
+  /// saved only when the toll is complete, so new rows hold an empty list.
+  tollUnresolved Json @map("toll_unresolved")
+
+  /// `true` when any rate used was older than 12 months. The route planner
+  /// now always writes `false` (the toll comes from a provider).
+  tollNeedsVerification Boolean @default(false) @map("toll_needs_verification")
+
+  /// Name of the TollProvider that computed the toll in this row (src/tolls).
+  tollSource String @map("toll_source")
+
+  /// Label of the route variant the result was saved for (e.g. the cheapest).
+  routeLabel String? @map("route_label")
+
+  /// Axle class the toll was computed for: `2`, `3`, `4` or `5+` (the
+  /// planner's tariff buckets). `null` = unknown — it is not known which
+  /// vehicle the toll was computed for, so the rate is not used for a detour
+  /// cost (docs/decisions.md §7).
+  axleClass String? @map("axle_class")
+
+  /// `true` = the class was assumed (the planner without `axleCount` uses 5+
+  /// axles). A row with an assumed class is not used for a detour cost either.
+  axleClassDefaulted Boolean @default(false) @map("axle_class_defaulted")
+
+  calculatedAt DateTime @default(now()) @map("calculated_at")
+
+  @@index([offerId, calculatedAt])
+  @@map("route_calculations")
+}
+
+model Contractor {
+  id               String   @id @default(uuid())
+  companyId        String   @map("company_id")
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name             String
+  taxId            String?  @map("tax_id")
+  country          String?
+  city             String?
+  address          String?
+  contactPerson    String?  @map("contact_person")
+  contactEmail     String?  @map("contact_email")
+  contactPhone     String?  @map("contact_phone")
+  isActive         Boolean  @default(true) @map("is_active")
+  rating           Int?
+  avgPaymentDays   Int?     @map("avg_payment_days")
+  paymentRating    Int?     @map("payment_rating") // 1-5
+  reliabilityScore Int?     @map("reliability_score") // 0-100
+  notes            String?
+  isBlacklisted    Boolean  @default(false) @map("is_blacklisted")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  offers Offer[]
+
+  @@index([companyId, name])
+  @@map("contractors")
+}
+
+model DispatcherDemand {
+  id           String  @id @default(uuid())
+  companyId    String  @map("company_id")
+  company      Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dispatcherId String  @map("dispatcher_id")
+  dispatcher   User    @relation(fields: [dispatcherId], references: [id])
+
+  // Core fields
+  title       String    @default("")
+  description String?
+  priority    String    @default("MEDIUM")
+  status      String    @default("OPEN")
+  neededBy    DateTime? @map("needed_by")
+
+  // Vehicle requirements
+  vehicleType         String? @map("vehicle_type")
+  trailerType         String? @map("trailer_type")
+  minLoadingMeters    Float?  @map("min_loading_meters")
+  maxWeight           Float?  @map("max_weight")
+  temperatureRequired Boolean @default(false) @map("temperature_required")
+  temperatureMin      Float?  @map("temperature_min")
+  temperatureMax      Float?  @map("temperature_max")
+  adrRequired         Boolean @default(false) @map("adr_required")
+  adrClass            String? @map("adr_class")
+
+  // Route preferences
+  availableTrucks     Int?     @map("available_trucks")
+  vehicleTypes        String[] @map("vehicle_types")
+  regions             String[]
+  maxPickupRadiusKm   Int?     @map("max_pickup_radius_km")
+  preferredCountries  String[] @map("preferred_countries")
+  preferredDirections String[] @map("preferred_directions")
+  minPricePerKm       Decimal? @map("min_price_per_km") @db.Decimal(10, 2)
+  minMarginPct        Decimal? @map("min_margin_pct") @db.Decimal(5, 2)
+  searchReloads       Boolean  @default(false) @map("search_reloads")
+  searchReturns       Boolean  @default(false) @map("search_returns")
+  maxExtraStops       Int      @default(0) @map("max_extra_stops")
+
+  // Subscription / auto-notify
+  autoNotify   Boolean   @default(false) @map("auto_notify")
+  lastSearchAt DateTime? @map("last_search_at")
+
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("dispatcher_demands")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  companyId String           @map("company_id")
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String           @map("user_id")
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offerId   String?          @map("offer_id")
+  type      NotificationType
+  title     String
+  message   String
+  isRead    Boolean          @default(false) @map("is_read")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  @@index([userId, isRead, createdAt])
+  @@map("notifications")
+}
+
+model EmailMessage {
+  id                       String        @id @default(uuid())
+  companyId                String        @map("company_id")
+  company                  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  messageId                String?       @map("message_id")
+  subject                  String
+  fromName                 String?       @map("from_name")
+  fromEmail                String        @map("from_email")
+  toEmail                  String        @map("to_email")
+  body                     String
+  receivedAt               DateTime      @map("received_at")
+  category                 EmailCategory @default(OTHER)
+  priority                 EmailPriority @default(MEDIUM)
+  isRead                   Boolean       @default(false) @map("is_read")
+  isStarred                Boolean       @default(false) @map("is_starred")
+  tags                     String[]
+  extractedPickupCity      String?       @map("extracted_pickup_city")
+  extractedPickupCountry   String?       @map("extracted_pickup_country")
+  extractedDeliveryCity    String?       @map("extracted_delivery_city")
+  extractedDeliveryCountry String?       @map("extracted_delivery_country")
+  extractedWeight          Float?        @map("extracted_weight")
+  extractedPrice           Float?        @map("extracted_price")
+  extractedDate            DateTime?     @map("extracted_date")
+  createdOfferId           String?       @map("created_offer_id")
+  llmSummary               String?       @map("llm_summary")
+  llmCategory              String?       @map("llm_category")
+  llmExtractedData         Json?         @map("llm_extracted_data")
+  notes                    String?
+  createdAt                DateTime      @default(now()) @map("created_at")
+  updatedAt                DateTime      @updatedAt @map("updated_at")
+
+  @@index([companyId, isRead])
+  @@index([companyId, category])
+  @@map("email_messages")
+}
+
+// ── EXCHANGE CONNECTIONS (Trans.eu, Timocom OAuth) ────────────────────────────
+model ExchangeConnection {
+  id                   String   @id @default(cuid())
+  companyId            String
+  exchange             String // TRANS_EU | TIMOCOM
+  accessToken          String
+  refreshToken         String
+  accessTokenExpiresAt DateTime
+  scope                String   @default("")
+  status               String   @default("ACTIVE") // ACTIVE | EXPIRED | DISCONNECTED
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, exchange], name: "companyId_exchange")
+  @@index([companyId])
+}
+
+// ── PUBLISHED OFFERS (publication history on freight exchanges) ─────────────
+model PublishedOffer {
+  id              String    @id @default(cuid())
+  companyId       String
+  exchange        String // TRANS_EU | TIMOCOM
+  externalOfferId String
+  originCity      String
+  originCountry   String
+  destCity        String
+  destCountry     String
+  weightKg        Float
+  publishedAt     DateTime  @default(now())
+  expiresAt       DateTime?
+  status          String    @default("ACTIVE") // ACTIVE | EXPIRED | CANCELLED
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@index([exchange])
+}
+
+// ── Fleet planning (src/fleet-planning, docs/fleet-planning/SPEC.md) ─────────
+
+enum WeeklyRestType {
+  REGULAR
+  REDUCED
+}
+
+enum DriverUnavailableReason {
+  LEAVE
+  SICKNESS
+  DRIVER_REQUEST
+  OTHER
+}
+
+/// A driver of the company. Single crew: at most one driver per vehicle
+/// (`vehicleId` is unique) and only a power unit, never a trailer.
+model Driver {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  firstName   String   @map("first_name")
+  lastName    String   @map("last_name")
+  phone       String?
+  email       String?
+  homeCity    String?  @map("home_city")
+  /// ISO 3166-1 alpha-2.
+  homeCountry String?  @map("home_country")
+  active      Boolean  @default(true)
+  vehicleId   String?  @unique @map("vehicle_id")
+  vehicle     Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  statuses DriverStatus[]
+
+  @@index([companyId])
+  @@map("drivers")
+}
+
+/// Manual driver status (SPEC §6), entered by the dispatcher. Append-only:
+/// every change is a new row with who entered it; the newest row is current.
+/// All instants are UTC; minutes are whole minutes.
+model DriverStatus {
+  id                           String                   @id @default(uuid())
+  driverId                     String                   @map("driver_id")
+  driver                       Driver                   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  enteredById                  String?                  @map("entered_by_id")
+  enteredBy                    User?                    @relation(fields: [enteredById], references: [id], onDelete: SetNull)
+  /// The instant the counters below describe.
+  asOf                         DateTime                 @map("as_of")
+  weeklyRestEndedAt            DateTime                 @map("weekly_rest_ended_at")
+  /// null = unknown (taken as REDUCED).
+  weeklyRestType               WeeklyRestType?          @map("weekly_rest_type")
+  weeklyRestAbroad             Boolean                  @default(false) @map("weekly_rest_abroad")
+  weeklyRestAtHome             Boolean                  @default(false) @map("weekly_rest_at_home")
+  /// Up to three most recent weekly rests, newest first, the first one being
+  /// the rest above: [{ type, endedAt, abroad }]. Needed for the exception of
+  /// two consecutive reduced weekly rests abroad (561/2006 art. 8(6)).
+  recentWeeklyRests            Json?                    @map("recent_weekly_rests")
+  drivingThisWeekMinutes       Int                      @map("driving_this_week_minutes")
+  drivingLastWeekMinutes       Int                      @map("driving_last_week_minutes")
+  /// 10-hour days used in the fixed week of `asOf`; null = unknown.
+  extendedDrivingDaysUsed      Int?                     @map("extended_driving_days_used")
+  /// Reduced daily rests since the last weekly rest; null = unknown.
+  reducedDailyRestsUsed        Int?                     @map("reduced_daily_rests_used")
+  /// null = unknown (21 h for every reduced weekly rest of known date); 0 = nothing owed.
+  compensationOwedMinutes      Int?                     @map("compensation_owed_minutes")
+  compensationDueBy            DateTime?                @map("compensation_due_by")
+  /// End of the last regular weekly rest (or compensation rest over 45 h) taken at home or base;
+  /// null = unknown (the rest at home is taken as due at `asOf`).
+  lastHomeRestEndedAt          DateTime?                @map("last_home_rest_ended_at")
+  /// The company offered the return; the driver chose to spend the rest elsewhere.
+  driverChoseToStayAway        Boolean                  @default(false) @map("driver_chose_to_stay_away")
+  /// Optional: the driver is on duty now (after a daily rest, before the next one).
+  /// On duty at `asOf` (true), resting (false), unknown (null — worst case: on duty, limits used up).
+  onDuty                       Boolean?                 @map("on_duty")
+  dailyRestEndedAt             DateTime?                @map("daily_rest_ended_at")
+  drivingSinceDailyRestMinutes Int?                     @map("driving_since_daily_rest_minutes")
+  drivingSinceBreakMinutes     Int?                     @map("driving_since_break_minutes")
+  workSinceBreakMinutes        Int?                     @map("work_since_break_minutes")
+  unavailableUntil             DateTime?                @map("unavailable_until")
+  unavailableReason            DriverUnavailableReason? @map("unavailable_reason")
+  createdAt                    DateTime                 @default(now()) @map("created_at")
+
+  @@index([driverId, createdAt])
+  @@map("driver_statuses")
+}

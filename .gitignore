@@ -1,0 +1,32 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+.next/
+.turbo/
+*.log
+npm-debug.log*
+.DS_Store
+coverage/
+prisma/generated/
+**/tsconfig.tsbuildinfo
+**/next-env.d.ts
+**/prisma/seed.js
+**/prisma/seed.js.map
+**/prisma/seed.d.ts
+
+# Environment file backups (e.g. .env.backup-20260506_115348)
+.env.backup-*
+.env.tmp
+
+# Audit artifact — never committed
+repo-audit.zip
+
+*.spec.js
+*.spec.d.ts
+*.spec.js.map
+
+# Patch leftovers (a reject file once reached a commit)
+*.rej
+*.orig

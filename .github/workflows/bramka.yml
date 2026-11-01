@@ -1,0 +1,75 @@
+# The full check on a clean runner, for every PR and every push to main.
+#
+# The check is defined by tools/bramka.sh — it is only run here, the checks
+# are not repeated. Install only with `npm ci` from the root, as on a fresh
+# clone.
+name: bramka
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Per PR, or per branch on a push — without the fallback every push to main
+# would share one group and cancel the previous run.
+concurrency:
+  group: bramka-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bramka:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      # No npm cache: the runner must be clean, like a fresh clone.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: npm ci
+        run: npm ci
+
+      # Random secrets for this run — never fixed in the repo. The API and the
+      # seed have no fallback values, and the check runs the seed in Docker.
+      - name: secrets for this run
+        run: |
+          JWT_SECRET="$(openssl rand -hex 32)"
+          ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          echo "::add-mask::$JWT_SECRET"
+          echo "::add-mask::$ENCRYPTION_KEY"
+          echo "JWT_SECRET=$JWT_SECRET" >> "$GITHUB_ENV"
+          echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" >> "$GITHUB_ENV"
+
+      # Diagnostics only, not a check: which platform binaries npm ci installed
+      # on Linux (the lock lists every platform; lock-platforms.spec.ts).
+      - name: platform binaries after npm ci
+        run: |
+          for d in @next @esbuild @rollup @sentry @unrs; do
+            echo "--- node_modules/$d"
+            ls node_modules/$d 2>/dev/null | grep -E 'linux|darwin|win32' || echo "(no platform binaries)"
+          done
+          # Without its platform package the esbuild installer downloads the
+          # binary itself, silently. This shows whether it works at all.
+          echo "--- esbuild: $(node_modules/.bin/esbuild --version 2>&1)"
+
+      - name: tools/bramka.sh
+        run: ./tools/bramka.sh 2>&1 | tee bramka.log
+
+      # Diagnostics too: whether a tool downloaded a binary from the network
+      # instead of taking it from the lock. A warning in the summary, not a failure.
+      - name: silent downloads
+        if: always()
+        run: |
+          if grep -n -E 'Downloading swc|lockfile missing swc' bramka.log; then
+            echo "::warning::The build downloaded binaries from the network instead of the lock (see above)."
+          else
+            echo "No binary downloads in the full check log."
+          fi

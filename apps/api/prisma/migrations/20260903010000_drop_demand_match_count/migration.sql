@@ -1,0 +1,14 @@
+-- Usuwa kolumne `match_count` z `dispatcher_demands`.
+--
+-- Kolumna miala dwie sprzeczne semantyki zapisywane przez dwie rozne sciezki:
+--   searchOffers                 -> nadpisywala ja migawka z ostatniego wyszukiwania
+--   checkNewOfferAgainstDemands  -> inkrementowala ja kumulatywnie
+-- Wartosc nie odpowiadala wiec ani „ile ofert pasuje teraz", ani „ile razy cos
+-- pasowalo" — zalezala od tego, ktora sciezka zadzialala ostatnia.
+--
+-- Zamiast synchronizowac dwa zapisy, liczba dopasowan jest liczona przy odczycie
+-- w GET /api/demands. Kontrakt API sie nie zmienia: pole `matchCount` nadal jest
+-- w kazdym elemencie listy, ale pochodzi z biezacego stanu ofert, nie z zapisu.
+--
+-- UWAGA: operacja jest nieodwracalna i kasuje dotychczasowe wartosci licznika.
+ALTER TABLE "dispatcher_demands" DROP COLUMN "match_count";

@@ -1,0 +1,11 @@
+-- Dodaje brakujaca wartosc 'DEMAND_MATCH' do typu NotificationType.
+--
+-- Obie sciezki dopasowania oferty do zapotrzebowania (searchOffers oraz
+-- checkNewOfferAgainstDemands) zapisywaly powiadomienia tego typu, ale wartosc
+-- nigdy nie istniala w enumie — zapis konczyl sie bledem
+-- "invalid input value for enum NotificationType: DEMAND_MATCH".
+--
+-- ALTER TYPE ... ADD VALUE jest bezpieczne w transakcji na PostgreSQL >= 12,
+-- dopoki nowa wartosc nie jest uzywana w tej samej transakcji. Ta migracja
+-- jej nie uzywa.
+ALTER TYPE "NotificationType" ADD VALUE 'DEMAND_MATCH';
