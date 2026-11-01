@@ -1,5 +1,70 @@
 # AiSpedytor
 
+### Intelligent Freight Forwarding & Logistics Automation Platform
+
+AiSpedytor is a modular logistics platform designed for freight forwarders,
+dispatchers and transport companies. It combines transport offer management,
+route planning, profitable part-load matching, fleet operations, pricing
+analysis and AI-assisted email processing.
+
+The project focuses on practical transport workflows: finding additional
+loads along an existing route, evaluating their profitability, checking
+vehicle compatibility and supporting dispatch decisions.
+
+## Core modules
+
+| Module | Capabilities |
+|---|---|
+| **Route Planning** | International route calculation, distance and driving-time estimates, country-level distances, transport costs and margin analysis. |
+| **LTL Load Matching** | Search for additional loads along a vehicle's route, considering available loading metres, payload, ADR, refrigeration requirements, dates and detour profitability. |
+| **Load Planning** | Interactive load placement, weight and length checks, centre-of-gravity estimates and automatic ordering. |
+| **Fleet Management** | Vehicles, trailers, technical parameters, document expiry tracking and vehicle-to-offer matching. |
+| **Driver Availability** | Driving-time and rest-period calculations based on manually entered driver activity and European transport rules. |
+| **Freight & Demand Matching** | Matching transport offers to vehicles and dispatcher-defined transport requirements. |
+| **AI Email Processing** | Classification of transport-related emails, structured data extraction and conversion into transport offers. |
+| **Negotiation Support** | Break-even calculations, suggested price ranges, margin scenarios and negotiation arguments based on company data. |
+| **Risk Assessment** | Contractor risk, payment conditions, penalty clauses, ADR compatibility and transport-specific risk indicators. |
+| **Transport Exchange Integration** | Trans.eu OAuth and freight-publication API integration code, pending external verification. |
+| **Analytics** | Revenue, margins, freight rates, route statistics and historical trends based on company data. |
+
+## Routing architecture: HERE and OSRM
+
+The route-planning module was originally developed with a HERE Routing API
+adapter supporting truck-specific parameters, vehicle dimensions, ADR-related
+restrictions, alternative-route requests and toll information.
+
+The historical HERE adapter was subsequently removed from the active codebase.
+The current development and demonstration version uses OSRM to avoid recurring
+routing API costs during testing.
+
+**Important:** The current OSRM configuration uses a car-routing profile and
+does not enforce truck-specific road restrictions. Reintroducing a suitable
+truck-routing provider, such as HERE, is a future integration task.
+
+## Technology stack
+
+- **Backend:** TypeScript, NestJS, Prisma, PostgreSQL
+- **Frontend:** Next.js 15, React 19, Tailwind CSS, Zustand
+- **Architecture:** npm workspaces, Turborepo, modular REST API
+- **AI:** Anthropic Claude Haiku for email classification, with rule-based fallback
+- **Mapping:** OSRM, OpenStreetMap, Nominatim, Leaflet
+- **Testing:** Jest, integration scenarios, Docker-based PostgreSQL checks, CI
+
+## Engineering approach
+
+The platform combines deterministic logistics calculations with targeted
+LLM functionality. Load matching, pricing, risk scores and recommendations
+are based on explicit rules and company data rather than being presented
+as AI-generated decisions.
+
+The repository includes automated tests, deployment documentation,
+architecture notes and explicit descriptions of external-service
+dependencies and known limitations.
+
+---
+
+## Technical documentation
+
 A web application for freight forwarders and small carriers: transport
 offers, fleet, contractors, route costing, part-load (LTL) matching along a
 vehicle's route, price negotiation support and offer risk checks. The user
